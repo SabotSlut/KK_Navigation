@@ -1,4 +1,7 @@
 ﻿using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
 using ActionGame;
 using ActionGame.Point;
 using EMK.Cartography;
@@ -34,7 +37,7 @@ namespace KK_Navigation
             [HarmonyPostfix, HarmonyPatch(typeof(ActionMap), "LoadCalcGate")]
             private static void LoadCalcGatePostfix(ActionMap __instance)
             {
-                Logger.LogInfo("Injecting Gates");
+                Logger.LogInfo("Injecting gates.");
                 Dictionary<string, InjectedGate> injectedGates = new Dictionary<string, InjectedGate>();
 
                 foreach (var file in GetGateBundles(__instance.infoDic))
@@ -91,6 +94,12 @@ namespace KK_Navigation
                 foreach (var ig in injectedGates)
                 {
                     InjectedGate gate = ig.Value;
+                    if (!injectedGates.ContainsKey(gate.linkName))
+                    {
+                        Logger.LogError($"Couldn't inject gate {gate.ID} ({gate.Name}) because it targets gate {gate.linkName}, which does not exist.");
+                        continue;
+                    }
+
                     InjectedGate linkedGate = injectedGates[gate.linkName];
                     gate.mapNo = linkedGate.linkMapNo;
                     gate.linkID = linkedGate.ID;
@@ -104,10 +113,10 @@ namespace KK_Navigation
 
                     __instance.calcGateDic[gate.linkMapNo].Add(gate);
 
-                    Logger.LogInfo($"Injected Gate {gate.ID} ({gate.Name})");
+                    Logger.LogInfo($"Injected gate {gate.ID} ({gate.Name})");
                 }
 
-                Logger.LogInfo("Finished Injecting Gates");
+                Logger.LogInfo("Finished injecting gates.");
             }
 
             [HarmonyDelegate(typeof(ActionMap), "get_navDic")]
@@ -118,7 +127,7 @@ namespace KK_Navigation
             {
                 // TODO: Calculate the distance between gates. For now, we're just using a placeholder value.
                 
-                Logger.LogInfo("Injecting Navigation Information");
+                Logger.LogInfo("Injecting navigation information.");
                 var navDic = getNavDic();
                 Graph aStarGraph = new Graph();
                 var AMap = new Dictionary<int, Node>();
@@ -193,7 +202,7 @@ namespace KK_Navigation
                         }
                         else
                         {
-                            Logger.LogWarning($"NO PATH FROM {startMap.Value.AssetName} to {endMap.Value.AssetName}!");
+                            Logger.LogWarning($"No path from {startMap.Value.AssetName} to {endMap.Value.AssetName}.");
                             /*
                             ___navDic[startMap.Key][endMap.Key] = new List<ActionMap.NavigationInfo> { new ActionMap.NavigationInfo
                             {
@@ -205,7 +214,7 @@ namespace KK_Navigation
                     }
                 }
 
-                Logger.LogInfo("Finished Injecting Navigation Information");
+                Logger.LogInfo("Finished injecting navigation information.");
             }
 
             /// <summary>
@@ -220,6 +229,112 @@ namespace KK_Navigation
                 }
 
                 return true; // Run the original method.
+            }
+
+            [HarmonyPostfix, HarmonyPatch(typeof(ActionMap), "LoadNavigationInfo")]
+            private static void NavigationInfoDebug(ActionMap __instance, get_navDic getNavDic)
+            {
+                var navDic = getNavDic();
+                var infoDic = __instance.infoDic;
+                var gateInfoDic = __instance.gateInfoDic;
+                var calcGateDic = __instance.calcGateDic;
+
+                string MapStr(int mapID) => infoDic.ContainsKey(mapID) ? $"{mapID} ({infoDic[mapID].AssetName})" : mapID.ToString();
+                string GateStr(int gateID) => gateInfoDic.ContainsKey(gateID) ? $"{gateID} ({gateInfoDic[gateID].Name})" : gateID.ToString();
+                string RouteStr(int[] route) => string.Join(", ", route.Select(GateStr).ToArray());
+
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("navDic:");
+                foreach (var kvp in navDic)
+                {
+                    foreach (var kvp2 in kvp.Value)
+                    {
+                        sb.AppendLine($"\tRoutes: {MapStr(kvp.Key)} to {MapStr(kvp2.Key)}");
+                        foreach (var navigationInfo in kvp2.Value)
+                        {
+                            sb.AppendLine($"\t\t{navigationInfo.distance}: {RouteStr(navigationInfo.IDs)}");
+                        }
+                    }
+                }
+                File.WriteAllText("navDic.txt", sb.ToString());
+
+                sb.Length = 0;
+                sb.AppendLine("infoDic:");
+                foreach (var param in infoDic)
+                {
+                    var info = param.Value;
+                    sb.AppendLine($"\tMap: {MapStr(param.Key)}");
+                    sb.AppendLine($"\t\tMapName: {info.MapName}");
+                    sb.AppendLine($"\t\tNo: {MapStr(info.No)}");
+                    sb.AppendLine($"\t\tAssetBundleName: {info.AssetBundleName}");
+                    sb.AppendLine($"\t\tAssetName: {info.AssetName}");
+                    sb.AppendLine($"\t\tisGate: {info.isGate}");
+                    sb.AppendLine($"\t\tis2D: {info.is2D}");
+                    sb.AppendLine($"\t\tisWarning: {info.isWarning}");
+                    sb.AppendLine($"\t\tState: {info.State}");
+                    sb.AppendLine($"\t\tLookFor: {info.LookFor}");
+                    sb.AppendLine($"\t\tisOutdoors: {info.isOutdoors}");
+                    sb.AppendLine($"\t\tisFreeH: {info.isFreeH}");
+                    sb.AppendLine($"\t\tisSpH: {info.isSpH}");
+                    sb.AppendLine($"\t\tThumbnailBundle: {info.ThumbnailBundle}");
+                    sb.AppendLine($"\t\tThumbnailAsset: {info.ThumbnailAsset}");
+                }
+                File.WriteAllText("infoDic.txt", sb.ToString());
+
+                sb.Length = 0;
+                sb.AppendLine("gateInfoDic:");
+                foreach (var gateInfo in gateInfoDic)
+                {
+                    var info = gateInfo.Value;
+                    sb.AppendLine($"\tGate: {GateStr(gateInfo.Key)}");
+                    sb.AppendLine($"\t\tID: {info.ID}");
+                    sb.AppendLine($"\t\tmapNo: {MapStr(info.mapNo)}");
+                    sb.AppendLine($"\t\tlinkID: {info.linkID}");
+                    sb.AppendLine($"\t\tpos: {info.pos}");
+                    sb.AppendLine($"\t\tang: {info.ang}");
+                    sb.AppendLine($"\t\tName: {info.Name}");
+                    sb.AppendLine($"\t\tplayerPos: {info.playerPos}");
+                    sb.AppendLine($"\t\tplayerAng: {info.playerAng}");
+                    sb.AppendLine($"\t\tplayerHitPos: {info.playerHitPos}");
+                    sb.AppendLine($"\t\tplayerHitSize: {info.playerHitSize}");
+                    sb.AppendLine($"\t\theroineHitPos: {info.heroineHitPos}");
+                    sb.AppendLine($"\t\theroineHitSize: {info.heroineHitSize}");
+                    sb.AppendLine($"\t\ticonPos: {info.iconPos}");
+                    sb.AppendLine($"\t\ticonHitPos: {info.iconHitPos}");
+                    sb.AppendLine($"\t\ticonHitSize: {info.iconHitSize}");
+                    sb.AppendLine($"\t\tmoveType: {info.moveType}");
+                    sb.AppendLine($"\t\tseType: {info.seType}");
+                }
+                File.WriteAllText("gateInfoDic.txt", sb.ToString());
+
+                sb.Length = 0;
+                sb.AppendLine("calcGateDic:");
+                foreach (var calc in calcGateDic)
+                {
+                    sb.AppendLine($"\tMap: {MapStr(calc.Key)}");
+                    foreach (var info in calc.Value)
+                    {
+                        sb.AppendLine($"\t\tGate: {GateStr(info.ID)}");
+                        sb.AppendLine($"\t\t\tID: {info.ID}");
+                        sb.AppendLine($"\t\t\tmapNo: {MapStr(info.mapNo)}");
+                        sb.AppendLine($"\t\t\tlinkID: {info.linkID}");
+                        sb.AppendLine($"\t\t\tpos: {info.pos}");
+                        sb.AppendLine($"\t\t\tang: {info.ang}");
+                        sb.AppendLine($"\t\t\tName: {info.Name}");
+                        sb.AppendLine($"\t\t\tplayerPos: {info.playerPos}");
+                        sb.AppendLine($"\t\t\tplayerAng: {info.playerAng}");
+                        sb.AppendLine($"\t\t\tplayerHitPos: {info.playerHitPos}");
+                        sb.AppendLine($"\t\t\tplayerHitSize: {info.playerHitSize}");
+                        sb.AppendLine($"\t\t\theroineHitPos: {info.heroineHitPos}");
+                        sb.AppendLine($"\t\t\theroineHitSize: {info.heroineHitSize}");
+                        sb.AppendLine($"\t\t\ticonPos: {info.iconPos}");
+                        sb.AppendLine($"\t\t\ticonHitPos: {info.iconHitPos}");
+                        sb.AppendLine($"\t\t\ticonHitSize: {info.iconHitSize}");
+                        sb.AppendLine($"\t\t\tmoveType: {info.moveType}");
+                        sb.AppendLine($"\t\t\tseType: {info.seType}");
+                    }
+                }
+                File.WriteAllText("calcGateDic.txt", sb.ToString());
             }
         }
     }
