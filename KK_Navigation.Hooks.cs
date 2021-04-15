@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -6,6 +7,7 @@ using ActionGame;
 using ActionGame.Point;
 using EMK.Cartography;
 using HarmonyLib;
+using Illusion;
 using UnityEngine;
 
 namespace KK_Navigation
@@ -122,31 +124,92 @@ namespace KK_Navigation
             [HarmonyDelegate(typeof(ActionMap), "get_navDic")]
             private delegate Dictionary<int, Dictionary<int, List<ActionMap.NavigationInfo>>> get_navDic();
 
+            public static float GetDistanceBetweenGates(GateInfo gate1, GateInfo gate2)
+            {
+                float distance = 0;
+                if (!gate1.calc.ContainsKey(gate2.ID))
+                {
+                    Logger.LogWarning($"Failed determining the distance between {PrintGate(gate1)} and {PrintGate(gate2)}.");
+                    return 0;
+                }
+
+                for (var i = 0; i < gate1.calc[gate2.ID].Length - 1; i++)
+                {
+                    var p1 = gate1.calc[gate2.ID][i];
+                    var p2 = gate1.calc[gate2.ID][i + 1];
+
+                    distance += Vector3.Distance(p1, p2);
+                }
+
+                return distance;
+            }
+
             [HarmonyPostfix, HarmonyPatch(typeof(ActionMap), "LoadNavigationInfo")]
             private static void LoadNavigationInfoPostfix(ActionMap __instance, get_navDic getNavDic)
             {
-                // TODO: Calculate the distance between gates. For now, we're just using a placeholder value.
-                
                 Logger.LogInfo("Injecting navigation information.");
                 var navDic = getNavDic();
+
+                foreach (var kvp in __instance.calcGateDic)
+                {
+                    foreach (var gate in kvp.Value)
+                    {
+                        foreach (var gate2 in kvp.Value)
+                        {
+                            if (gate == gate2)
+                            {
+                                continue;
+                            }
+
+                            if (!gate.calc.ContainsKey(gate2.ID))
+                            {
+                                gate.calc[gate2.ID] = new[] { gate.playerPos, gate2.playerPos };
+                            }
+                        }
+                    }
+                }
+
                 Graph aStarGraph = new Graph();
                 var AMap = new Dictionary<int, Node>();
+                var AGate = new Dictionary<int, Node>();
                 foreach (var info in __instance.gateInfoDic)
                 {
                     int startMap = __instance.gateInfoDic[info.Value.linkID].mapNo;
                     int endMap = info.Value.mapNo;
+                    int gate = info.Value.ID;
+                    int linkGate = info.Value.linkID;
 
+                    if (!AGate.ContainsKey(gate))
+                        aStarGraph.AddNode(AGate[gate] = new Node(gate, Node.NodeType.Gate));
+                    if (!AGate.ContainsKey(linkGate))
+                        aStarGraph.AddNode(AGate[linkGate] = new Node(linkGate, Node.NodeType.Gate));
                     if (!AMap.ContainsKey(startMap))
-                    {
-                        aStarGraph.AddNode(AMap[startMap] = new Node(startMap));
-                    }
-
+                        aStarGraph.AddNode(AMap[startMap] = new Node(startMap, Node.NodeType.Map));
                     if (!AMap.ContainsKey(endMap))
+                        aStarGraph.AddNode(AMap[endMap] = new Node(endMap, Node.NodeType.Map));
+
+                    aStarGraph.AddArc(new Arc(AMap[startMap], AGate[gate], 0));
+                    aStarGraph.AddArc(new Arc(AGate[gate], AMap[endMap], 0));
+
+                    foreach (var gate2 in __instance.calcGateDic[endMap])
                     {
-                        aStarGraph.AddNode(AMap[endMap] = new Node(endMap));
+                        if (info.Value == gate2 || __instance.gateInfoDic[linkGate] == gate2)
+                            continue;
+                        if (!AGate.ContainsKey(gate2.ID))
+                            aStarGraph.AddNode(AGate[gate2.ID] = new Node(gate2.ID, Node.NodeType.Gate));
+
+                        aStarGraph.AddArc(new Arc(AGate[gate], AGate[gate2.ID], GetDistanceBetweenGates(__instance.gateInfoDic[linkGate], gate2)));
                     }
 
-                    aStarGraph.AddArc(new Arc(AMap[startMap], AMap[endMap], info.Key, 3.5f));
+                    foreach (var gate2 in __instance.calcGateDic[startMap])
+                    {
+                        if (info.Value == gate2)
+                            continue;
+                        if (!AGate.ContainsKey(gate2.ID))
+                            aStarGraph.AddNode(AGate[gate2.ID] = new Node(gate2.ID, Node.NodeType.Gate));
+
+                        aStarGraph.AddArc(new Arc(AGate[gate], AGate[gate2.ID], GetDistanceBetweenGates(info.Value, gate2)));
+                    }
                 }
 
                 foreach (var startMap in __instance.infoDic)
@@ -159,62 +222,81 @@ namespace KK_Navigation
 
                     foreach (var endMap in __instance.infoDic)
                     {
-                        if (!AMap.ContainsKey(endMap.Key))
-                        {
+                        if (!AMap.ContainsKey(endMap.Key) || startMap.Key == endMap.Key)
                             continue;
-                        }
-
-                        if (startMap.Key == endMap.Key)
-                        {
-                            continue;
-                        }
-
                         if (!navDic.ContainsKey(startMap.Key))
-                        {
                             navDic[startMap.Key] = new Dictionary<int, List<ActionMap.NavigationInfo>>();
-                        }
-
                         if (navDic[startMap.Key].ContainsKey(endMap.Key))
-                        {
                             continue;
-                        }
 
                         AStar aStar = new AStar(aStarGraph);
+                        foreach (Arc arc in aStarGraph.Arcs)
+                        {
+                            if (arc.EndNode.Type == Node.NodeType.Map)
+                            {
+                                arc.Passable = arc.EndNode.ID == endMap.Key;
+                            }
+                        }
+
                         aStar.SearchPath(AMap[startMap.Key], AMap[endMap.Key]);
                         if (aStar.PathFound)
                         {
-                            List<int> arcs = new List<int>();
-                            List<string> arcsDebug = new List<string>();
+                            List<int> gates = new List<int>();
+                            List<string> nodesDebug = new List<string>(aStar.PathByNodes.Length);
                             float distance = 0;
+                            foreach (var node in aStar.PathByNodes)
+                            {
+                                nodesDebug.Add(PrintNode(node, __instance));
+                                if (node.Type == Node.NodeType.Gate)
+                                {
+                                    gates.Add(node.ID);
+                                }
+                            }
+
                             foreach (var arc in aStar.PathByArcs)
                             {
-                                arcs.Add(arc.ID);
                                 distance += arc.Distance;
-                                arcsDebug.Add($"{arc.ID} ({__instance.gateInfoDic[arc.ID].Name})");
                             }
+
                             Logger.LogInfo($"Added path from {startMap.Value.AssetName} to {endMap.Value.AssetName}:");
-                            Logger.LogInfo($"    {string.Join(", ", arcsDebug.ToArray())}");
+                            Logger.LogInfo($"    Nodes: {string.Join(", ", nodesDebug.ToArray())}");
                             navDic[startMap.Key][endMap.Key] = new List<ActionMap.NavigationInfo> { new ActionMap.NavigationInfo
                             {
                                 distance = distance,
-                                IDs = arcs.ToArray(),
+                                IDs = gates.ToArray(),
                             } };
                         }
                         else
                         {
                             Logger.LogWarning($"No path from {startMap.Value.AssetName} to {endMap.Value.AssetName}.");
-                            /*
-                            ___navDic[startMap.Key][endMap.Key] = new List<ActionMap.NavigationInfo> { new ActionMap.NavigationInfo
-                            {
-                                distance = 0,
-                                IDs = new int[0],
-                            } };
-                            */
                         }
                     }
                 }
 
                 Logger.LogInfo("Finished injecting navigation information.");
+            }
+
+            private static string PrintNode(Node n, ActionMap __instance)
+            {
+                switch (n.Type)
+                {
+                    case Node.NodeType.Gate:
+                        return $"Gate {n.ID} ({__instance.gateInfoDic[n.ID].Name})";
+                    case Node.NodeType.Map:
+                        return $"Map {n.ID} ({__instance.infoDic[n.ID].AssetName})";
+                    default:
+                        return "Bad NodeType";
+                }
+            }
+
+            private static string PrintGate(GateInfo gate)
+            {
+                return $"{gate.ID} ({gate.Name})";
+            }
+
+            private static string PrintMap(MapInfo.Param map)
+            {
+                return $"{map.No} ({map.AssetName})";
             }
 
             /// <summary>
@@ -289,7 +371,7 @@ namespace KK_Navigation
                     sb.AppendLine($"\tGate: {GateStr(gateInfo.Key)}");
                     sb.AppendLine($"\t\tID: {info.ID}");
                     sb.AppendLine($"\t\tmapNo: {MapStr(info.mapNo)}");
-                    sb.AppendLine($"\t\tlinkID: {info.linkID}");
+                    sb.AppendLine($"\t\tlinkID: {GateStr(info.linkID)}");
                     sb.AppendLine($"\t\tpos: {info.pos}");
                     sb.AppendLine($"\t\tang: {info.ang}");
                     sb.AppendLine($"\t\tName: {info.Name}");
@@ -304,6 +386,11 @@ namespace KK_Navigation
                     sb.AppendLine($"\t\ticonHitSize: {info.iconHitSize}");
                     sb.AppendLine($"\t\tmoveType: {info.moveType}");
                     sb.AppendLine($"\t\tseType: {info.seType}");
+                    sb.AppendLine($"\t\tcalc: {info.calc}");
+                    foreach (var c in info.calc)
+                    {
+                        sb.AppendLine($"\t\t\t{c.Key}: {string.Join(", ", c.Value.Select(v => v.ToString()).ToArray())}");
+                    }
                 }
                 File.WriteAllText("gateInfoDic.txt", sb.ToString());
 
@@ -317,7 +404,7 @@ namespace KK_Navigation
                         sb.AppendLine($"\t\tGate: {GateStr(info.ID)}");
                         sb.AppendLine($"\t\t\tID: {info.ID}");
                         sb.AppendLine($"\t\t\tmapNo: {MapStr(info.mapNo)}");
-                        sb.AppendLine($"\t\t\tlinkID: {info.linkID}");
+                        sb.AppendLine($"\t\t\tlinkID: {GateStr(info.linkID)}");
                         sb.AppendLine($"\t\t\tpos: {info.pos}");
                         sb.AppendLine($"\t\t\tang: {info.ang}");
                         sb.AppendLine($"\t\t\tName: {info.Name}");
@@ -332,9 +419,64 @@ namespace KK_Navigation
                         sb.AppendLine($"\t\t\ticonHitSize: {info.iconHitSize}");
                         sb.AppendLine($"\t\t\tmoveType: {info.moveType}");
                         sb.AppendLine($"\t\t\tseType: {info.seType}");
+                        sb.AppendLine($"\t\t\tcalc: {info.calc}");
+                        foreach (var c in info.calc)
+                        {
+                            sb.AppendLine($"\t\t\t\t{c.Key}: {string.Join(", ", c.Value.Select(v => v.ToString()).ToArray())}");
+                        }
                     }
                 }
                 File.WriteAllText("calcGateDic.txt", sb.ToString());
+            }
+
+            [HarmonyPrefix, HarmonyPatch(typeof(ActionMap), "MapCalcPosition", typeof(int), typeof(int), typeof(Vector3), typeof(int?))]
+            private static bool MapCalcPositionReplacement(out Vector3[] __result, ActionMap __instance, ref int mapNo, ref int gateID, ref Vector3 pos, int? prevID)
+            {
+                Logger.LogInfo($"@MapCalcPosition@ 1: mapNo: {mapNo}");
+                List<GateInfo> gateInfoList = __instance.calcGateDic[mapNo];
+                Logger.LogInfo($"@MapCalcPosition@ 2: {prevID}");
+                GateInfo gateInfo1 = prevID.HasValue ? gateInfoList.Find(gate => gate.ID == prevID.Value) : null;
+                Logger.LogInfo($"@MapCalcPosition@ 3: gateInfo1: {gateInfo1}");
+                if (gateInfo1 != null && gateInfo1.calc.TryGetValue(gateID, out var route1))
+                {
+                    Logger.LogInfo($"@MapCalcPosition@ 4: route1: {route1}");
+                    int count = Utils.Math.MinDistanceRouteIndex(route1, pos);
+                    Logger.LogInfo($"@MapCalcPosition@ 5: count: {count}");
+                    if (count != -1)
+                    {
+                        Logger.LogInfo("@MapCalcPosition@ 6");
+                        __result = route1.Skip(count).ToArray();
+                        Logger.LogInfo($"@MapCalcPosition@ 7: __result: {__result}");
+                        return false; // Skip the original method.
+                    }
+                    Logger.LogInfo("@MapCalcPosition@ 8");
+                }
+
+                Logger.LogInfo($"@MapCalcPosition@ 9: gateInfoList: {gateInfoList}");
+                foreach (GateInfo gateInfo2 in gateInfoList)
+                {
+                    Logger.LogInfo($"@MapCalcPosition@ 10: gateID: {gateID}");
+                    if (gateInfo2.calc.TryGetValue(gateID, out var route2))
+                    {
+                        Logger.LogInfo($"@MapCalcPosition@ 11: route2: {route2}");
+                        int count = Utils.Math.MinDistanceRouteIndex(route2, pos);
+                        Logger.LogInfo($"@MapCalcPosition@ 12: count: {count}");
+                        if (count != -1)
+                        {
+                            Logger.LogInfo("@MapCalcPosition@ 13");
+                            __result = route2.Skip(count).ToArray();
+                            Logger.LogInfo($"@MapCalcPosition@ 14: __result: {__result}");
+                            return false; // Skip the original method.
+                        }
+                        Logger.LogInfo("@MapCalcPosition@ 15");
+                    }
+                    Logger.LogInfo("@MapCalcPosition@ 16");
+                }
+
+                Logger.LogInfo("@MapCalcPosition@ 17");
+                __result = null;
+                Logger.LogInfo($"@MapCalcPosition@ 18: __result: {__result}");
+                return false; // Skip the original method.
             }
         }
     }

@@ -10,7 +10,6 @@ namespace EMK.Cartography
 	[Serializable]
 	public class Arc
 	{
-        public int ID;
         public float Distance;
 		Node _StartNode, _EndNode;
 		bool _Passable;
@@ -24,9 +23,8 @@ namespace EMK.Cartography
 		/// <exception cref="ArgumentException">StartNode and EndNode must be different.</exception>
 		/// <param name="Start">The node from which the arc starts.</param>
 		/// <param name="End">The node to which the arc ends.</param>
-		public Arc(Node Start, Node End, int id, float distance)
+		public Arc(Node Start, Node End, float distance)
 		{
-            ID = id;
             Distance = distance;
 			StartNode = Start;
 			EndNode = End;

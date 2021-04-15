@@ -10,17 +10,26 @@ namespace EMK.Cartography
 	[Serializable]
 	public class Node
 	{
+		public enum NodeType
+		{
+			None,
+			Map,
+			Gate,
+		}
+
 		bool _Passable;
 		ArrayList _IncomingArcs, _OutgoingArcs;
-        public readonly int ID;
+		public readonly int ID;
+		public readonly NodeType Type;
 
 		/// <summary>
 		/// Constructor.
 		/// </summary>
 		/// <param name="id">The ID of this node.</param>
-		public Node(int id)
+		public Node(int id, NodeType type)
 		{
-            ID = id;
+			ID = id;
+			Type = type;
 			_Passable = true;
 			_IncomingArcs = new ArrayList();
 			_OutgoingArcs = new ArrayList();
@@ -163,7 +172,7 @@ namespace EMK.Cartography
 		/// Returns the textual description of the node.
 		/// </summary>
 		/// <returns>String describing this node.</returns>
-		public override string ToString() { return ID.ToString(); }
+		public override string ToString() => $"{Type} {ID}";
 
 		/// <summary>
 		/// Object.Equals override.
@@ -176,7 +185,7 @@ namespace EMK.Cartography
 		{
 			Node N = (Node)O;
 			if ( N==null ) throw new ArgumentException("Type "+O.GetType()+" cannot be compared with type "+GetType()+"!");
-			return ID == N.ID;
+			return ID == N.ID && Type == N.Type;
 		}
 
 		/// <summary>
@@ -185,7 +194,7 @@ namespace EMK.Cartography
 		/// <returns>The reference of the new object.</returns>
 		public object Clone()
 		{
-			Node N = new Node(ID);
+			Node N = new Node(ID, Type);
 			N._Passable = _Passable;
 			return N;
 		}
@@ -194,7 +203,7 @@ namespace EMK.Cartography
 		/// Object.GetHashCode override.
 		/// </summary>
 		/// <returns>HashCode value.</returns>
-		public override int GetHashCode() { return ID.GetHashCode(); }
+		public override int GetHashCode() => ((ID << 2) + (int)Type).GetHashCode();
 
         /// <summary>
         /// Returns the assigned distance between two nodes : Dx²+Dy²+Dz²

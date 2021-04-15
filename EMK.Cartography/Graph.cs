@@ -60,9 +60,9 @@ namespace EMK.Cartography
 		/// <param name="y">Y coordinate.</param>
 		/// <param name="z">Z coordinate.</param>
 		/// <returns>The reference of the new node / null if the node is already in the graph.</returns>
-		public Node AddNode(int id)
+		public Node AddNode(int id, Node.NodeType type)
 		{
-			Node NewNode = new Node(id);
+			Node NewNode = new Node(id, type);
 			return AddNode(NewNode) ? NewNode : null;
 		}
 
@@ -89,9 +89,9 @@ namespace EMK.Cartography
 		/// <param name="EndNode">End node for the arc.</param>
 		/// <param name="Weight">Weight for the arc.</param>
 		/// <returns>The reference of the new arc / null if the arc is already in the graph.</returns>
-		public Arc AddArc(Node StartNode, Node EndNode, int id, float distance)
+		public Arc AddArc(Node StartNode, Node EndNode, float distance)
 		{
-			Arc NewArc = new Arc(StartNode, EndNode, id, distance);
+			Arc NewArc = new Arc(StartNode, EndNode, distance);
 			return AddArc(NewArc) ? NewArc : null;
 		}
 

@@ -31,6 +31,7 @@ namespace KK_Navigation
             this.iconHitSize = new Vector3(1.0f, 1.0f, 1.0f);
             //this.moveType = Use On Collision
             this.seType = -1;
+            this.calc = new Dictionary<int, Vector3[]>();
         }
     }
 }
